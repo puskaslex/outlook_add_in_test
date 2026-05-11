@@ -1,5 +1,15 @@
 const DEFAULT_ACTION = true; // true = Allow, false = block
 const DEFAULT_MESSAGE = "This email was blocked due to a policy violation. Please review and modify the message before resending.";
+const WEB_SOCKET_URL = "wss://localhost:27442" // not modify this value
+
+// Sanitize input for logging to prevent log injection attacks
+function sanitizeForLog(input) {
+    if (typeof input !== 'string') {
+        return '[non-string value]';
+    }
+    // Remove newlines, carriage returns, and control characters
+    return input.replace(/[\r\n\x00-\x1F\x7F]/g, '');
+}
 
 var mailboxItem;
 Office.initialize = function () {
@@ -13,8 +23,20 @@ Office.initialize = function () {
 // communication req - response - req - response ...
 // If ever there is a need to send multiple requests at once, this class needs changes
 class ReusableWebSocket {
-    constructor(url) {		
-        this.url = url;
+    constructor(url) {
+        // Validate that we're only connecting to the allowed local service
+        const allowedHosts = [
+            "wss://localhost:27442",
+            "wss://127.0.0.1:27442",
+            "wss://[::1]:27442"
+        ];
+
+        const normalizedUrl = url.toLowerCase();
+        if (!allowedHosts.includes(normalizedUrl)) {
+            throw new Error(`Invalid WebSocket URL: ${url}. Only connections to localhost:27442 are allowed.`);
+        }
+
+        this.url = normalizedUrl;
         this.socket = null;
         this.isOpen = false;
         this.messageQueue = [];		// Queue to store messages while WebSocket is closed
@@ -27,7 +49,7 @@ class ReusableWebSocket {
             const timeoutId = setTimeout(() => {
                 if (!this.isOpen && this.socket) {
                         this.socket.close(); // Close the WebSocket if it's stuck
-				}
+                }
                 reject(new Error('WebSocket connection timed out.'));
             }, timeout);
 
@@ -37,14 +59,34 @@ class ReusableWebSocket {
             this.socket.addEventListener('open', () => {
                 clearTimeout(timeoutId);
                 this.isOpen = true;
-               
-				console.log('WebSocket connection opened');
-				this._processQueue();
-				
+
+                console.log('WebSocket connection opened');
+                this._processQueue();
+
                 resolve();
             });
 
+            // snyk:disable-next-line CWE-345
+            // Security Note: WebSocket message events don't have an origin property (unlike
+            // window.postMessage events).  Snyk thinks this is a `window.postMessage` event.
+            // Security is enforced by:
+            // 1. URL validation in constructor restricts connections to localhost:27442 only
+            // 2. TLS/WSS encryption for the connection
+            // 3. Message content validation below (type checking + whitelist validation)
             this.socket.addEventListener('message', (event) => {
+
+                if (typeof event.data !== "string") {
+                    console.warn("Unexpected message type:", typeof event.data);
+                    return;
+                }
+
+                const validResponses = ["allow", "block", "continue"];
+                const trimmedData = event.data.trim();
+                if (!validResponses.includes(trimmedData)) {
+                    console.warn("Invalid message content:", sanitizeForLog(event.data));
+                    return;
+                }
+
                 this._handleIncomingMessage(event.data); // Handle incoming messages
             });
 
@@ -79,13 +121,13 @@ class ReusableWebSocket {
     _sendMessageInternal(message, resolve, reject) {
         try {
             this.socket.send(message); // Send the message (binary or text)
-			this.pendingPromises.push({ resolve, reject });
+            this.pendingPromises.push({ resolve, reject });
         } catch (error) {
             reject(error); // If sending fails, reject the promise
         }
     }
 
-	// Handle incoming WebSocket messages and resolve the corresponding promises
+    // Handle incoming WebSocket messages and resolve the corresponding promises
     _handleIncomingMessage(data) {
         if (this.pendingPromises.length > 0) {
             const { resolve, reject } = this.pendingPromises.shift(); // Pop the first item from the pending promises
@@ -95,7 +137,7 @@ class ReusableWebSocket {
                 reject(error); // Reject the promise if an error occurs while handling the data
             }
         } else {
-            console.warn('Received message without a corresponding promise:', data);
+            console.warn('Received message without a corresponding promise:', sanitizeForLog(data));
         }
     }
 
@@ -103,32 +145,32 @@ class ReusableWebSocket {
     close() {
         return new Promise((resolve, reject) => {
             if (this.isOpen) {
-                
+
                 this.socket.addEventListener('close', () => {
-					this.isOpen = false;
-					console.log('WebSocket closed successfully.');
-					resolve();
+                    this.isOpen = false;
+                    console.log('WebSocket closed successfully.');
+                    resolve();
                 });
-                
-				this.socket.addEventListener('error', (error) => {
-					this.isOpen = false;
-					reject(new Error(`WebSocket error during close: ${error.message}`));
-				});
-                
+
+                this.socket.addEventListener('error', (error) => {
+                    this.isOpen = false;
+                    reject(new Error(`WebSocket error during close: ${error.message}`));
+                });
+
                 this.socket.close();
             } else {
                 resolve();
             }
         });
     }
-    
-	// Process all queued messages once the WebSocket is open
+
+    // Process all queued messages once the WebSocket is open
     _processQueue() {
-		if (!this.isOpen) {
-			console.log('WebSocket is not open. Waiting for open...');
-			return;
-		}
-    
+        if (!this.isOpen) {
+            console.log('WebSocket is not open. Waiting for open...');
+            return;
+        }
+
         while (this.messageQueue.length > 0) {
             const { message, resolve, reject } = this.messageQueue.shift(); // Pop the first item from the queue
             this._sendMessageInternal(message, resolve, reject); // Send the message
@@ -136,9 +178,22 @@ class ReusableWebSocket {
     }
 }
 
+function extractTextFromHtml(html) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    doc.querySelectorAll('tr').forEach(row => {
+        const cells = Array.from(row.querySelectorAll('td, th'));
+        const rowText = cells.map(c => c.textContent.trim()).join(' ');
+        row.replaceWith(rowText + ' ');
+    });
+
+    return doc.body.textContent.replace(/\s+/g, ' ').trim();
+}
+
 async function onMessageSendHandler(event) {
     mailboxItem = Office.context.mailbox.item;
-    const wsClient = new ReusableWebSocket('wss://localhost:27442/');
+    const wsClient = new ReusableWebSocket(WEB_SOCKET_URL);
 
     try {
         await wsClient.open();
@@ -147,13 +202,13 @@ async function onMessageSendHandler(event) {
         if (stop) return;
 
         const getSubject = async () => {
-			try {
-				return asyncGetValue(mailboxItem.subject.getAsync);
-			} catch (error) {
-				console.error('Failed to get subject:', error);
-				return '[No Subject]'; // Provide a fallback subject
-			}	
-		};
+            try {
+                return await asyncGetValue(mailboxItem.subject.getAsync);
+            } catch (error) {
+                console.error('Failed to get subject:', error);
+                return '[No Subject]'; // Provide a fallback subject
+            }
+        };
 
         let recipients = await extractRecipients(mailboxItem);
         let subject = await getSubject();
@@ -162,22 +217,23 @@ async function onMessageSendHandler(event) {
         stop = await communicate(wsClient, event, message);
         if (stop) return;
 
-		const getBody = async () =>  {
-			try {
-				return asyncGetValue(mailboxItem.body.getAsync.bind(mailboxItem.body, Office.CoercionType.Text));
-			} catch (error) {
-				console.error('Failed to get body:', error);
-				return '[No Body]'; // Provide a fallback body
-			}
-		};
-		
+        const getBody = async () =>  {
+            try {
+                const html = await asyncGetValue(mailboxItem.body.getAsync.bind(mailboxItem.body, Office.CoercionType.Html));
+                return extractTextFromHtml(html);
+            } catch (error) {
+                console.error('Failed to get body:', error);
+                return '[No Body]'; // Provide a fallback body
+            }
+        };
+
         let body = await getBody();
-        console.log(body); 
+        console.log(body);
 
         stop = await communicate(wsClient, event, "body;" + recipients + body);
         if (stop) return;
 
-   
+
         const getAttachments = async () => asyncGetValue(mailboxItem.getAttachmentsAsync);
         const attachmentsInfo = await getAttachments();
 
@@ -192,27 +248,27 @@ async function onMessageSendHandler(event) {
                         const attachmentFormat = result.value.format;  // "base64" or "arrayBuffer"
                         console.log(attachment.name)
                         console.log(attachmentFormat);
-                        
-						let stop = false;
+
+                        let stop = false;
                         if (attachmentFormat === "base64") {
-							try {
-								const arrayBuffer = base64ToArrayBuffer(attachmentContent);
-								stop = await communicate(wsClient, event, combineStringAndArrayBuffer("attachment;" + recipients + attachment.name + ";", arrayBuffer)); 
-							} catch (err) {
-								console.error("Failed to process base64 attachment:", err);
-								return;
-							}
+                            try {
+                                const arrayBuffer = base64ToArrayBuffer(attachmentContent);
+                                stop = await communicate(wsClient, event, combineStringAndArrayBuffer("attachment;" + recipients + attachment.name + ";", arrayBuffer));
+                            } catch (err) {
+                                console.error("Failed to process base64 attachment:", err);
+                                return;
+                            }
                         } else if (attachmentFormat === "arrayBuffer") {
-							try {
-								stop = await communicate(wsClient, event, combineStringAndArrayBuffer("attachment;" + recipients + attachment.name + ";", attachmentFormat));
-							} catch (err) {
-								console.error("Failed to process arrayBuffer attachment:", err);
-								return;
-							}
+                            try {
+                                stop = await communicate(wsClient, event, combineStringAndArrayBuffer("attachment;" + recipients + attachment.name + ";", attachmentFormat));
+                            } catch (err) {
+                                console.error("Failed to process arrayBuffer attachment:", err);
+                                return;
+                            }
                         } else {
-							console.error("Unsupported attachment format:", attachmentFormat);
-						}
-                        
+                            console.error("Unsupported attachment format:", attachmentFormat);
+                        }
+
                         if (stop) return;
                     } else {
                         console.error('Error retrieving attachment:', result.error);
@@ -221,7 +277,7 @@ async function onMessageSendHandler(event) {
                     console.error('Error processing attachment:', error);
                 }
             });
-           
+
            await Promise.all(attachmentPromises);
         }
     } catch (error) { // Catches errors on both open and send
@@ -250,49 +306,49 @@ function asyncGetValue(getMethod) {
 }
 
 async function extractRecipients(mailboxItem) {
-	let recipients = "";
-	
-	try {
-		if (mailboxItem.itemType === Office.MailboxEnums.ItemType.Appointment) {
-			const [organizer, requiredAttendees, optionalAttendees] = await Promise.all([
-					asyncGetValue(mailboxItem.organizer.getAsync),
-					asyncGetValue(mailboxItem.requiredAttendees.getAsync),
-					asyncGetValue(mailboxItem.optionalAttendees.getAsync)
-				]);
-				
-			recipients = organizer.emailAddress;
-			if (requiredAttendees.length > 0) {
-				recipients += ";" + requiredAttendees.map(recipient => recipient.emailAddress).join(";");
-			}
-			if (optionalAttendees.length > 0) {
-				recipients += ";" + optionalAttendees.map(recipient => recipient.emailAddress).join(";");
-			}
+    let recipients = "";
 
-			recipients += "|";  // Add separator for email recipients
-		}
-		else {
-			 // For email messages, get from, to, cc, bcc recipients 
-			const [from, to, cc, bcc ] = await Promise.all([
-				asyncGetValue(mailboxItem.from.getAsync),
-				asyncGetValue(mailboxItem.to.getAsync),
-				asyncGetValue(mailboxItem.cc.getAsync),
-				asyncGetValue(mailboxItem.bcc.getAsync)
-			]);
+    try {
+        if (mailboxItem.itemType === Office.MailboxEnums.ItemType.Appointment) {
+            const [organizer, requiredAttendees, optionalAttendees] = await Promise.all([
+                    asyncGetValue(mailboxItem.organizer.getAsync),
+                    asyncGetValue(mailboxItem.requiredAttendees.getAsync),
+                    asyncGetValue(mailboxItem.optionalAttendees.getAsync)
+                ]);
 
-			recipients = from.emailAddress + ";" + to.map(recipient => recipient.emailAddress).join(";");
-			if (cc.length > 0) {
-				recipients += ";" + cc.map(recipient => recipient.emailAddress).join(";");
-			}
-			if (bcc.length > 0) {
-				recipients += ";" + bcc.map(recipient => recipient.emailAddress).join(";");
-			}
+            recipients = organizer.emailAddress;
+            if (requiredAttendees.length > 0) {
+                recipients += ";" + requiredAttendees.map(recipient => recipient.emailAddress).join(";");
+            }
+            if (optionalAttendees.length > 0) {
+                recipients += ";" + optionalAttendees.map(recipient => recipient.emailAddress).join(";");
+            }
 
-			recipients += "|";  // Add separator for email recipients
+            recipients += "|";  // Add separator for email recipients
+        }
+        else {
+             // For email messages, get from, to, cc, bcc recipients
+            const [from, to, cc, bcc ] = await Promise.all([
+                asyncGetValue(mailboxItem.from.getAsync),
+                asyncGetValue(mailboxItem.to.getAsync),
+                asyncGetValue(mailboxItem.cc.getAsync),
+                asyncGetValue(mailboxItem.bcc.getAsync)
+            ]);
 
-		}
-	} catch(error) {
-		console.error("Error retrieving recipients:", error);
-	}
+            recipients = from.emailAddress + ";" + to.map(recipient => recipient.emailAddress).join(";");
+            if (cc.length > 0) {
+                recipients += ";" + cc.map(recipient => recipient.emailAddress).join(";");
+            }
+            if (bcc.length > 0) {
+                recipients += ";" + bcc.map(recipient => recipient.emailAddress).join(";");
+            }
+
+            recipients += "|";  // Add separator for email recipients
+
+        }
+    } catch(error) {
+        console.error("Error retrieving recipients:", error);
+    }
     return recipients;
 }
 
@@ -304,7 +360,7 @@ async function communicate(webSocket, evt, message)
 
     if (blockVar === response)
     {
-		console.log('Blocking message...');
+        console.log('Blocking message...');
         await webSocket.close();
         mailboxItem.notificationMessages.addAsync('NoSend', {
             type: 'errorMessage',
@@ -324,9 +380,9 @@ async function communicate(webSocket, evt, message)
         evt.completed({ allowEvent: false });
         return true;
     }
-    else if (allowVar === response) 
+    else if (allowVar === response)
     {
-		console.log('Allowing message...');
+        console.log('Allowing message...');
         await webSocket.close();
         evt.completed({ allowEvent: true });
         return true;
@@ -341,7 +397,7 @@ function getAttachmentContentAsync(attachmentId) {
             if (result.status === Office.AsyncResultStatus.Succeeded) {
                 resolve(result);
             } else {
-				console.error(`Failed to get attachment content for ${attachmentId}:`, result.error);
+                console.error(`Failed to get attachment content for ${attachmentId}:`, result.error);
                 reject(result.error);
             }
         });
