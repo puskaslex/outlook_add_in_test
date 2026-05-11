@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+This it a template file for the manifest file for the Netwrix Endpoint Protector Outlook add-in.
+
+Documentation is available online at: https://helpcenter.netwrix.com/category/endpointprotector
+under the "Content Aware Protection for New Outlook" section.
+
+To deploy the add-in:
+
+1. Host the mainpage.html, validator.js, main_128.png and main_64.png files on an HTTPS server
+  that is reachable for each user of the add-in. For example, you can use a static website in
+  Azure Storage or on Amazon S3 (see links below) or on your own web server.
+
+  After hosting the files, copy the URLs of the mainpage.html and optionally of the icons.
+  For example the URLs could look like this:
+    https://www.example.com/validator/mainpage.html
+    https://www.example.com/validator/validator.js
+    https://www.example.com/validator/main_128.png
+
+2. Edit this file according to the instructions in the comments that are marked with the word:
+   "CUSTOMER EDIT", you should edit the lines following these comments.
+
+3. Deploy the add-in in the Microsoft 365 admin center, see link below.
+
+   For testing, before a mass deployment, you can deploy the add-in for a single user by logging
+   into your Microsoft 365 account and then navigating to: https://aka.ms/olksideload
+   Afer a pop-up window appears, go to the "My add-ins" section and click on:
+   "Add a custom add-in" / "Add from file", then select this manifest file.
+
+For more information, see:
+
+Static website hosting in Azure Storage
+https://learn.microsoft.com/en-us/azure/storage/blobs/storage-blob-static-website
+
+Configuring a static website on Amazon S3
+https://docs.aws.amazon.com/AmazonS3/latest/userguide/HostingWebsiteOnS3Setup.html
+
+Deploy add-ins in the Microsoft 365 admin center
+https://learn.microsoft.com/en-us/microsoft-365/admin/manage/manage-deployment-of-add-ins?view=o365-worldwide
+
+-->
+<OfficeApp
+          xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+          xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
+          xsi:type="MailApp">
+    <!-- IMPORTANT! Id must be unique for your add-in, if you reuse this manifest ensure that you change this id to a new GUID. -->
+    <Id>6cd6c5d5-f2b8-4e35-b82e-f0ec51826084</Id>
+    <!--Version. Updates from the store only get triggered if there is a version change. -->
+    <Version>1.0.0.0</Version>
+    <ProviderName>Netwrix</ProviderName>
+    <DefaultLocale>en-US</DefaultLocale>
+    <DisplayName DefaultValue="Netwrix Endpoint Protector" />
+    <Description DefaultValue="Netwrix Endpoint Protector prevents confidential data leaks for your organization"/>
+
+    <!-- CUSTOMER EDIT: optionally, you have to change the icon of the add-in -->
+    <IconUrl DefaultValue="https://www.example.com/validator/main_64.png" />
+    <!-- CUSTOMER EDIT: optionally, you have to change the high resolution icon of the add-in -->
+    <HighResolutionIconUrl DefaultValue="https://www.example.com/validator/main_128.png"/>
+
+    <SupportUrl DefaultValue="https://www.netwrix.com/endpoint-dlp-solution.html" />
+
+    <!-- Domains that will be allowed when navigating. Navigation will only be allowed if the domain is on this list. -->
+    <AppDomains>
+        <AppDomain>localhost</AppDomain>
+        <AppDomain>127.0.0.1</AppDomain>
+        <AppDomain>::1</AppDomain>
+        <!-- CUSTOMER EDIT: add here the domain name of the add-in URL, for example: www.example.com -->
+        <AppDomain>www.example.com</AppDomain>
+    </AppDomains>
+    <Hosts>
+        <Host Name="Mailbox" />
+    </Hosts>
+    <Requirements>
+        <Sets>
+            <Set Name="Mailbox" MinVersion="1.1" />
+        </Sets>
+    </Requirements>
+    <FormSettings>
+        <Form xsi:type="ItemEdit">
+            <DesktopSettings>
+                <!-- CUSTOMER EDIT: add here the URL of the add-in main page, for example:
+                    https://www.example.com/validator/mainpage.html. The URL MUST be a valid
+                    HTTPS URL and point to the "mainpage.html" file provided in this package.
+                -->
+                <SourceLocation DefaultValue="https://www.example.com/validator/mainpage.html" />
+            </DesktopSettings>
+        </Form>
+    </FormSettings>
+    <Permissions>ReadWriteMailbox</Permissions>
+        <Rule xsi:type="RuleCollection" Mode="Or">
+            <Rule xsi:type="ItemIs" ItemType="Message" FormType="Edit" />
+            <Rule xsi:type="ItemIs" ItemType="Appointment" FormType="Edit" />
+        </Rule>
+    <DisableEntityHighlighting>false</DisableEntityHighlighting>
+
+    <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">
+        <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides/1.1" xsi:type="VersionOverridesV1_1">
+            <Requirements>
+                <bt:Sets DefaultMinVersion="1.1">
+                    <bt:Set Name="Mailbox" />
+                </bt:Sets>
+            </Requirements>
+            <Hosts>
+                <Host xsi:type="MailHost">
+                    <DesktopFormFactor>
+                        <FunctionFile resid="residUILessFunctionFileUrl" />
+                        <ExtensionPoint xsi:type="Events">
+                            <Event Type="ItemSend" FunctionExecution="synchronous" FunctionName="onMessageSendHandler" />
+                        </ExtensionPoint>
+                    </DesktopFormFactor>
+                </Host>
+            </Hosts>
+            <Resources>
+                <bt:Urls>
+                    <!-- CUSTOMER EDIT: add here the URL of the add-in main page, for example:
+                        https://www.example.com/validator/mainpage.html. The URL MUST be a valid
+                        HTTPS URL and point to the "mainpage.html" file provided in this package.
+                    -->
+                    <bt:Url id="residUILessFunctionFileUrl" DefaultValue="https://www.example.com/validator/mainpage.html" />
+                </bt:Urls>
+            </Resources>
+        </VersionOverrides>
+    </VersionOverrides>
+</OfficeApp>
